@@ -231,4 +231,65 @@ Zynq MPU. */
 #define configINTERRUPT_CONTROLLER_CPU_INTERFACE_OFFSET ( -0xf00 )
 #define configUNIQUE_INTERRUPT_PRIORITIES               32
 
+/* ----------------------------------------------------------
+ * CONTEXTIDR task-ID tracing  (issue #784)
+ * ----------------------------------------------------------
+ * On each context switch, write the incoming tasks numeric ID
+ * into CONTEXTIDR.PROCID (bits [31:8]).  This lets a debugger
+ * use context-ID-match breakpoints to single-step a single PROS 
+ * task without stopping on every other task.
+ *
+ * ARM Architecture Reference Manual, ARMv7-A/R edition,
+ * section B4.1.36 "CONTEXTIDR, Context ID Register":
+ *
+ *   Short-descriptor format: PROCID = bits[31:8], ASID = bits[7:0]
+ *   Long-descriptor  format: PROCID = bits[31:0]
+ *
+ * I think that the V5 Brain uses the Long-descriptor format (TTBR0/TTBR1 hold
+ * the current ASID), so the whole register is PROCID and we can
+ * write a task number directly without masking the ASID field.
+ *
+ * configUSE_TRACE_FACILITY = 1 is already required by the PROS
+ * kernel, so this adds no new FreeRTOS compile-time dependency.
+ * ---------------------------------------------------------- */
+ 
+/* Writes a stable, monotonically incrementing ID to each new task.
+ *
+ * traceTASK_CREATE fires inside xTaskCreate / xTaskCreateStatic
+ * after the TCB is initialised but before the task is scheduled.
+ * pxNewTCB points at the new task; pxCurrentTCB still points at
+ * the creator, so we must use pxNewTCB explicitly.
+ *
+ * _pros_next_task_id is a uint32_t defined in src/rtos/rtos.c
+ * (added by this PR) and declared extern below. */
+#define traceTASK_CREATE(pxNewTCB)                                   \
+    do {                                                              \
+        extern uint32_t _pros_next_task_id;                          \
+        vTaskSetTaskNumber((TaskHandle_t)(pxNewTCB),                  \
+                           (UBaseType_t)(_pros_next_task_id++));      \
+    } while (0)
+ 
+/* Write CONTEXTIDR on every context-switch-in.
+ *
+ * pxCurrentTCB is already updated to the incoming task when
+ * traceTASK_SWITCHED_IN fires.
+ *
+ * MCR p15, 0, <Rt>, c13, c0, 1  ->  write CONTEXTIDR
+ *   (ARMv7-A ARM, section B4.1.36, encoding A1)
+ *
+ * Shifting left by 8 places the task number in PROCID[31:8].
+ * Under the Long-descriptor format (V5 Brain) the shift is a
+ * no op semantically; under Short descriptor it should safely avoid
+ * overwriting ASID[7:0]. Task IDs up to 0x00FFFFFF are
+ * representable either way. */
+#define traceTASK_SWITCHED_IN()                                      \
+    do {                                                              \
+        uint32_t _ctx = (uint32_t)uxTaskGetTaskNumber(pxCurrentTCB); \
+        __asm__ volatile(                                             \
+            "MCR p15, 0, %0, c13, c0, 1"                             \
+            :                                                         \
+            : "r"(_ctx << 8)                                          \
+            : "memory");                                              \
+    } while (0)
+
 #endif /* FREERTOS_CONFIG_H */
