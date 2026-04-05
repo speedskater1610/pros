@@ -25,6 +25,22 @@
 #define taskENTER_CRITICAL()		portENTER_CRITICAL()
 #define taskEXIT_CRITICAL()			portEXIT_CRITICAL()
 
+// Counter used by traceTASK_CREATE (in FreeRTOSConfig.h) to assign a unique,
+// monotonically (yes I looked this up to sound smart) increasing ID to every 
+// FreeRTOS task at creation time. The ID is stored in the TCB's uxTaskNumber 
+// field via vTaskSetTaskNumber() and is subsequently written to CONTEXTIDR.PROCID
+// by the traceTASK_SWITCHED_IN macro.
+//
+// I think extern "C" is required because FreeRTOSConfig.h (a C header) references
+// this symbol with a plain `extern uint32_t` declaration. Without C linkage
+// the name would be mangled and the linker would fail to find it.
+//
+// Start at 1 so that a raw CONTEXTIDR value of 0 unambiguously means
+// "no task has run yet / register not yet initialised", which might be useful
+// when cold inspecting the register in a debugger.
+extern "C" uint32_t _pros_next_task_id = 1;
+
+
 namespace pros {
 using namespace pros::c;
 
